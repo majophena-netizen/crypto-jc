@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,10 +19,38 @@ class Settings(BaseSettings):
     )
 
     # --- Exchange ---
+    # Mainnet keys. Only used when `binance_testnet` is false.
     binance_api_key: str = Field(default="", alias="BINANCE_API_KEY")
     binance_api_secret: str = Field(default="", alias="BINANCE_API_SECRET")
+    # Testnet keys. When `binance_testnet` is true these are preferred over
+    # the mainnet keys, so you can keep both sets in the same .env file.
+    binance_testnet_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("BINANCE_TESTNET_KEY", "BINANCE_DEMO_KEY"),
+    )
+    binance_testnet_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices("BINANCE_TESTNET_SECRET", "BINANCE_DEMO_SECRET"),
+    )
     # Default to testnet to avoid accidents with real money.
-    binance_testnet: bool = Field(default=True, alias="BINANCE_TESTNET")
+    # Accepts either BINANCE_TESTNET or BINANCE_API_TESTNET.
+    binance_testnet: bool = Field(
+        default=True,
+        validation_alias=AliasChoices("BINANCE_TESTNET", "BINANCE_API_TESTNET"),
+    )
+
+    @property
+    def active_binance_key(self) -> str:
+        """Returns the API key matching the current testnet/mainnet mode."""
+        if self.binance_testnet:
+            return self.binance_testnet_key or self.binance_api_key
+        return self.binance_api_key
+
+    @property
+    def active_binance_secret(self) -> str:
+        if self.binance_testnet:
+            return self.binance_testnet_secret or self.binance_api_secret
+        return self.binance_api_secret
     # Public market-data source. Binance is blocked in some regions (HTTP 451);
     # falling back to Kraken or Coinbase keeps the dashboard working while you
     # still execute real orders against Binance. Accepts any ccxt id.
@@ -42,7 +70,10 @@ class Settings(BaseSettings):
     default_mode: str = Field(default="paper", alias="DEFAULT_MODE")
 
     # --- Paper trading ---
-    paper_starting_usdt: float = Field(default=10_000.0, alias="PAPER_STARTING_USDT")
+    paper_starting_usdt: float = Field(
+        default=10_000.0,
+        validation_alias=AliasChoices("PAPER_STARTING_USDT", "START_BALANCE"),
+    )
     paper_fee_bps: float = Field(default=10.0, alias="PAPER_FEE_BPS")  # 0.10%
 
     # --- Live trading safety ---

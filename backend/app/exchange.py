@@ -48,8 +48,8 @@ def _public_client(preferred: str | None = None) -> ccxt.Exchange:
 def _private_client() -> ccxt.binance:
     client = ccxt.binance(
         {
-            "apiKey": settings.binance_api_key,
-            "secret": settings.binance_api_secret,
+            "apiKey": settings.active_binance_key,
+            "secret": settings.active_binance_secret,
             "enableRateLimit": True,
             "options": {"defaultType": "spot"},
         }
@@ -108,7 +108,7 @@ async def fetch_ticker(symbol: str | None = None) -> dict:
 
 
 async def fetch_balance() -> dict:
-    if not settings.binance_api_key or not settings.binance_api_secret:
+    if not has_live_credentials():
         raise RuntimeError("Binance API credentials not configured")
     client = _private_client()
     return await asyncio.to_thread(client.fetch_balance)
@@ -118,7 +118,7 @@ async def create_market_order(side: str, amount: float, symbol: str | None = Non
     """Place a market order on Binance (testnet unless disabled)."""
     if side not in {"buy", "sell"}:
         raise ValueError(f"invalid side: {side}")
-    if not settings.binance_api_key or not settings.binance_api_secret:
+    if not has_live_credentials():
         raise RuntimeError("Binance API credentials not configured")
     sym = symbol or settings.symbol
     client = _private_client()
@@ -130,4 +130,4 @@ def is_testnet() -> bool:
 
 
 def has_live_credentials() -> bool:
-    return bool(settings.binance_api_key and settings.binance_api_secret)
+    return bool(settings.active_binance_key and settings.active_binance_secret)
