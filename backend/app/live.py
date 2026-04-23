@@ -18,18 +18,20 @@ async def execute_live(
     side: str,
     price: float,
     quote_amount: float,
+    symbol: str | None = None,
     note: str = "",
 ) -> Trade | None:
     """Submit a market order on Binance and record the trade.
 
-    ``quote_amount`` is in USDT; amount (BTC) is derived from price. Orders
-    are capped by ``LIVE_MAX_ORDER_USDT`` as a hard safety guard.
+    ``quote_amount`` is in USDT; amount (base asset) is derived from price.
+    Orders are capped by ``LIVE_MAX_ORDER_USDT`` as a hard safety guard.
     """
     if side not in {"buy", "sell"}:
         raise ValueError(f"invalid side: {side}")
     if not exchange.has_live_credentials():
         raise RuntimeError("Live trading requires BINANCE_API_KEY and BINANCE_API_SECRET")
 
+    sym = symbol or settings.symbol
     quote_amount = min(quote_amount, settings.live_max_order_usdt)
     if quote_amount <= 0 or price <= 0:
         return None
@@ -37,7 +39,7 @@ async def execute_live(
     if amount <= 0:
         return None
 
-    order = await exchange.create_market_order(side, amount)
+    order = await exchange.create_market_order(side, amount, symbol=sym)
     filled_price = float(order.get("average") or order.get("price") or price)
     filled_amount = float(order.get("filled") or amount)
     fee_cost = 0.0
@@ -50,7 +52,7 @@ async def execute_live(
 
     trade = Trade(
         mode="live",
-        symbol=settings.symbol,
+        symbol=sym,
         side=side,
         price=filled_price,
         amount=filled_amount,

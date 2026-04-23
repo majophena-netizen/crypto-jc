@@ -14,6 +14,12 @@ class RuntimeState:
     last_scan_at: datetime | None = None
     last_action: str = "hold"
     last_price: float = 0.0
+    # In-memory estimate of our live average cost per symbol (fills are market
+    # so we record the fill price at entry and reset on close). Binance does
+    # not return an avg-cost for the account.
+    live_avg_cost: dict[str, float] = field(default_factory=dict)
+    # Latest mark prices per symbol from the most recent multi-scan.
+    last_prices: dict[str, float] = field(default_factory=dict)
     errors: list[str] = field(default_factory=list)
 
     def set_mode(self, mode: str) -> None:

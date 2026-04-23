@@ -61,10 +61,59 @@ class Settings(BaseSettings):
     anthropic_model: str = Field(
         default="claude-sonnet-4-5", alias="ANTHROPIC_MODEL"
     )
+    # Gemini (Google AI Studio). Free tier: 60 RPM without a card.
+    # Accepts either GEMINI_API_KEY or GEMINI_API as the env name.
+    gemini_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("GEMINI_API_KEY", "GEMINI_API"),
+    )
+    # gemini-2.5-flash is often overloaded on free tier; flash-lite is more
+    # stable and still plenty good for a short JSON verdict.
+    gemini_model: str = Field(
+        default="gemini-2.5-flash-lite", alias="GEMINI_MODEL"
+    )
+    gemini_fallback_model: str = Field(
+        default="gemini-flash-latest", alias="GEMINI_FALLBACK_MODEL"
+    )
+    # Which provider to use when both are configured.
+    # Accepts: "auto" (prefer gemini if set, else anthropic), "gemini", "anthropic".
+    ai_provider: str = Field(default="auto", alias="AI_PROVIDER")
+
+    @property
+    def active_ai_provider(self) -> str:
+        """Returns the actual provider to use based on configuration."""
+        choice = (self.ai_provider or "auto").lower()
+        if choice == "gemini" and self.gemini_api_key:
+            return "gemini"
+        if choice == "anthropic" and self.anthropic_api_key:
+            return "anthropic"
+        # auto / fallback
+        if self.gemini_api_key:
+            return "gemini"
+        if self.anthropic_api_key:
+            return "anthropic"
+        return ""
 
     # --- Trading symbol / timeframe ---
+    # Primary symbol used by single-symbol endpoints (market/ticker, etc.).
     symbol: str = Field(default="BTC/USDT", alias="TRADING_SYMBOL")
     timeframe: str = Field(default="15m", alias="TRADING_TIMEFRAME")
+    # Comma-separated list of symbols the scanner scans every tick. The
+    # autotrader picks the best BUY signal(s) across this universe.
+    scan_symbols_csv: str = Field(
+        default="BTC/USDT,ETH/USDT,SOL/USDT,BNB/USDT,XRP/USDT,DOGE/USDT,ADA/USDT,AVAX/USDT",
+        alias="SCAN_SYMBOLS",
+    )
+
+    @property
+    def scan_symbols(self) -> list[str]:
+        raw = self.scan_symbols_csv or self.symbol
+        out: list[str] = []
+        for piece in raw.split(","):
+            s = piece.strip().upper()
+            if s and s not in out:
+                out.append(s)
+        return out or [self.symbol]
 
     # --- Default mode on startup: "signals" | "paper" | "live" ---
     default_mode: str = Field(default="paper", alias="DEFAULT_MODE")
@@ -78,6 +127,21 @@ class Settings(BaseSettings):
 
     # --- Live trading safety ---
     live_max_order_usdt: float = Field(default=50.0, alias="LIVE_MAX_ORDER_USDT")
+
+    # --- Auto-trading (bot opens/closes positions by itself) ---
+    auto_trade_enabled: bool = Field(default=True, alias="AUTO_TRADE_ENABLED")
+    # Size of each entry, in USDT. Paper defaults to 10% of starting capital.
+    entry_position_usdt: float = Field(default=1000.0, alias="ENTRY_POSITION_USDT")
+    # Exit the position if unrealized PnL reaches +take_profit_pct %.
+    take_profit_pct: float = Field(default=2.0, alias="TAKE_PROFIT_PCT")
+    # Exit the position if unrealized PnL drops below -stop_loss_pct %.
+    stop_loss_pct: float = Field(default=1.5, alias="STOP_LOSS_PCT")
+    # Minimum AI confidence required to open a position on a BUY signal.
+    min_ai_confidence: float = Field(default=0.4, alias="MIN_AI_CONFIDENCE")
+    # Cooldown between auto trades, in seconds, to avoid churn.
+    auto_trade_cooldown_seconds: int = Field(default=120, alias="AUTO_TRADE_COOLDOWN_SECONDS")
+    # Max simultaneous open positions across all scanned symbols.
+    max_concurrent_positions: int = Field(default=3, alias="MAX_CONCURRENT_POSITIONS")
 
     # --- Strategy knobs ---
     rsi_period: int = Field(default=14, alias="RSI_PERIOD")

@@ -27,14 +27,26 @@ class Candle:
 
 _PUBLIC_FALLBACKS = ("binance", "kraken", "coinbase")
 
+# Cache ccxt clients at module level. ccxt caches markets on the client
+# instance after load_markets() runs, so reusing clients avoids the O(n)
+# market parse on every fetch (which otherwise burns CPU when scanning
+# many symbols in parallel).
+_public_clients: dict[str, ccxt.Exchange] = {}
+_private_client_instance: ccxt.binance | None = None
+_private_client_key: tuple[str, str, bool] | None = None
+
 
 def _symbol_for(client: ccxt.Exchange, symbol: str) -> str:
-    """Map our canonical BTC/USDT symbol to the one used by the given exchange."""
-    # Kraken exposes BTC as XBT and BTC/USDT only on some books; BTC/USD is universal.
+    """Map our canonical BASE/USDT symbol to the form used by the given exchange."""
+    if "/" not in symbol:
+        return symbol
+    base, quote = symbol.split("/", 1)
     if client.id == "kraken":
-        return "BTC/USD" if symbol == "BTC/USDT" else symbol
+        # Kraken commonly quotes in USD, not USDT; also uses XBT for BTC.
+        base_k = "XBT" if base == "BTC" else base
+        return f"{base_k}/USD" if quote == "USDT" else f"{base_k}/{quote}"
     if client.id == "coinbase":
-        return "BTC-USD" if symbol == "BTC/USDT" else symbol
+        return f"{base}-USD" if quote == "USDT" else f"{base}-{quote}"
     return symbol
 
 
@@ -42,20 +54,35 @@ def _public_client(preferred: str | None = None) -> ccxt.Exchange:
     name = (preferred or settings.market_data_exchange).lower()
     if not hasattr(ccxt, name):
         name = "binance"
-    return getattr(ccxt, name)({"enableRateLimit": True})
+    cached = _public_clients.get(name)
+    if cached is not None:
+        return cached
+    client = getattr(ccxt, name)({"enableRateLimit": True})
+    _public_clients[name] = client
+    return client
 
 
 def _private_client() -> ccxt.binance:
+    global _private_client_instance, _private_client_key
+    key = (
+        settings.active_binance_key or "",
+        settings.active_binance_secret or "",
+        bool(settings.binance_testnet),
+    )
+    if _private_client_instance is not None and _private_client_key == key:
+        return _private_client_instance
     client = ccxt.binance(
         {
-            "apiKey": settings.active_binance_key,
-            "secret": settings.active_binance_secret,
+            "apiKey": key[0],
+            "secret": key[1],
             "enableRateLimit": True,
             "options": {"defaultType": "spot"},
         }
     )
-    if settings.binance_testnet:
+    if key[2]:
         client.set_sandbox_mode(True)
+    _private_client_instance = client
+    _private_client_key = key
     return client
 
 

@@ -1,13 +1,14 @@
-"""Background scanner that periodically runs the signal pipeline."""
+"""Background scanner that periodically runs the multi-pair signal pipeline."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 
+from app import autotrader
 from app.config import settings
 from app.db import SessionLocal
-from app.signals import scan
+from app.signals import scan_all
 from app.state import runtime
 
 logger = logging.getLogger(__name__)
@@ -22,23 +23,34 @@ class Scanner:
         while not self._stop.is_set():
             try:
                 async with SessionLocal() as session:
-                    execute_paper = runtime.mode == "paper"
-                    result = await scan(session, execute_paper=execute_paper)
-                    runtime.mark_scan(result.snapshot.price, result.final_action)
-                    # Live execution hook: only if mode==live and action is buy/sell.
-                    if runtime.mode == "live" and result.final_action in {"buy", "sell"}:
+                    results = await scan_all(session, settings.scan_symbols)
+
+                    # Update runtime state with the best / primary result.
+                    if results:
+                        runtime.last_prices = {
+                            r.symbol: r.snapshot.price for r in results
+                        }
+                        primary = next(
+                            (r for r in results if r.symbol == settings.symbol),
+                            results[0],
+                        )
+                        runtime.mark_scan(primary.snapshot.price, primary.final_action)
+
+                    # Delegate entry/exit to the autotrader (paper + live).
+                    if runtime.mode in {"paper", "live"} and results:
                         try:
-                            from app.live import execute_live  # local to avoid cycles
-                            await execute_live(
-                                session,
-                                side=result.final_action,
-                                price=result.snapshot.price,
-                                quote_amount=settings.live_max_order_usdt,
-                                note=f"auto live trade; {result.explanation}",
+                            decisions = await autotrader.tick(
+                                session, results, mode=runtime.mode
                             )
+                            for d in decisions:
+                                if d.action not in {"hold", "skip"}:
+                                    logger.info(
+                                        "Autotrade [%s] %s: %s",
+                                        d.symbol, d.action, d.reason,
+                                    )
                         except Exception as exc:
-                            logger.exception("Live execution failed: %s", exc)
-                            runtime.push_error(f"live: {exc}")
+                            logger.exception("Autotrader failed: %s", exc)
+                            runtime.push_error(f"autotrader: {exc}")
             except Exception as exc:
                 logger.exception("Scan loop error: %s", exc)
                 runtime.push_error(str(exc))
@@ -51,7 +63,10 @@ class Scanner:
         if self._task is None or self._task.done():
             self._stop.clear()
             self._task = asyncio.create_task(self._loop())
-            logger.info("Scanner started (interval=%ss)", settings.scan_interval_seconds)
+            logger.info(
+                "Scanner started (interval=%ss, symbols=%s)",
+                settings.scan_interval_seconds, ",".join(settings.scan_symbols),
+            )
 
     async def stop(self) -> None:
         self._stop.set()

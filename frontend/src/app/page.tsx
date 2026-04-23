@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
+  Bot,
   Brain,
   LineChart as LineChartIcon,
   PlayCircle,
@@ -10,6 +11,7 @@ import {
   RotateCcw,
   ShieldAlert,
   ShieldCheck,
+  Target,
 } from "lucide-react";
 import { Card, Stat } from "@/components/card";
 import { PriceChart } from "@/components/price-chart";
@@ -19,11 +21,14 @@ import { ModeSwitcher } from "@/components/mode-switcher";
 import { cn, formatBtc, formatPct, formatUsd, timeAgo } from "@/lib/utils";
 import {
   api,
+  type AutotraderConfigPatch,
   type Candle,
   type Indicators,
   type Mode,
+  type PaperPosition,
   type PnlDay,
   type Portfolio,
+  type ScanRow,
   type SignalRow,
   type Status,
   type Ticker,
@@ -39,6 +44,7 @@ export default function Page() {
   const [trades, setTrades] = useState<TradeRow[]>([]);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [pnl, setPnl] = useState<PnlDay[]>([]);
+  const [marketScan, setMarketScan] = useState<ScanRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const [orderBusy, setOrderBusy] = useState(false);
@@ -46,7 +52,7 @@ export default function Page() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [s, t, c, ind, sigs, tr, pf, p] = await Promise.all([
+      const [s, t, c, ind, sigs, tr, pf, p, ms] = await Promise.all([
         api.status(),
         api.ticker(),
         api.candles(150),
@@ -55,6 +61,7 @@ export default function Page() {
         api.trades(40),
         api.portfolio(),
         api.dailyPnl(14),
+        api.marketScan().catch(() => ({ scan: [], symbols: [] })),
       ]);
       setStatus(s);
       setTicker(t);
@@ -64,6 +71,7 @@ export default function Page() {
       setTrades(tr.trades);
       setPortfolio(pf);
       setPnl(p.days);
+      setMarketScan(ms.scan);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -180,6 +188,22 @@ export default function Page() {
         </div>
       )}
 
+      <PositionsCard portfolio={portfolio} />
+
+      <MarketScanCard rows={marketScan} />
+
+      <AutotraderCard
+        status={status}
+        onUpdate={async (patch) => {
+          try {
+            await api.updateAutotrader(patch);
+            await refreshAll();
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        }}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card
           className="lg:col-span-2"
@@ -270,14 +294,18 @@ export default function Page() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <Card title="Recent signals">
-          <SignalTable signals={signals} />
-        </Card>
-        <Card title="Recent trades">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <Card className="lg:col-span-2" title="Trade history">
           <TradeTable trades={trades} />
         </Card>
+        <Card title="Daily PnL breakdown">
+          <DailyPnlTable days={pnl} />
+        </Card>
       </div>
+
+      <Card title="Recent signals">
+        <SignalTable signals={signals} />
+      </Card>
 
       <footer className="text-[11px] text-[var(--muted)] pt-4 border-t flex flex-wrap items-center gap-3">
         <span>Built with FastAPI + Next.js. Indicators: RSI, MACD, MA, Bollinger. AI: Claude.</span>
@@ -677,6 +705,381 @@ function Skeleton() {
       <div className="h-4 rounded bg-[var(--border)] w-1/2" />
       <div className="h-4 rounded bg-[var(--border)] w-1/3" />
       <div className="h-4 rounded bg-[var(--border)] w-2/3" />
+    </div>
+  );
+}
+
+function PositionsCard({ portfolio }: { portfolio: Portfolio | null }) {
+  if (!portfolio) return null;
+  const positions: PaperPosition[] = portfolio.paper.positions ?? [];
+  const totalUnrealized = positions.reduce((a, p) => a + p.unrealized_pnl, 0);
+
+  if (positions.length === 0) {
+    return (
+      <Card
+        title={
+          <span className="flex items-center gap-2">
+            <Target size={14} /> Active positions
+          </span>
+        }
+      >
+        <p className="text-sm text-[var(--muted)]">
+          No open positions. Auto-trader will enter on the best BUY signal.
+        </p>
+      </Card>
+    );
+  }
+
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          <Target size={14} /> Active positions ({positions.length})
+        </span>
+      }
+      action={
+        <span
+          className={cn(
+            "text-xs numeric",
+            totalUnrealized >= 0 ? "text-[var(--success)]" : "text-[var(--danger)]",
+          )}
+        >
+          Unrealized: ${formatUsd(totalUnrealized)}
+        </span>
+      }
+    >
+      <div className="overflow-x-auto -mx-2">
+        <table className="w-full text-xs">
+          <thead className="text-[var(--muted)]">
+            <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+              <th>Symbol</th>
+              <th className="text-right">Qty</th>
+              <th className="text-right">Avg cost</th>
+              <th className="text-right">Mark</th>
+              <th className="text-right">Value</th>
+              <th className="text-right">PnL</th>
+              <th className="text-right">PnL %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {positions.map((p) => (
+              <tr key={p.symbol} className="border-t [&>td]:px-2 [&>td]:py-2">
+                <td className="font-medium">{p.symbol}</td>
+                <td className="numeric text-right">{p.amount.toFixed(6)}</td>
+                <td className="numeric text-right">${formatUsd(p.avg_cost)}</td>
+                <td className="numeric text-right">${formatUsd(p.mark_price)}</td>
+                <td className="numeric text-right">${formatUsd(p.value_usdt)}</td>
+                <td
+                  className={cn(
+                    "numeric text-right",
+                    p.unrealized_pnl >= 0 ? "text-[var(--success)]" : "text-[var(--danger)]",
+                  )}
+                >
+                  ${formatUsd(p.unrealized_pnl)}
+                </td>
+                <td
+                  className={cn(
+                    "numeric text-right",
+                    p.unrealized_pct >= 0 ? "text-[var(--success)]" : "text-[var(--danger)]",
+                  )}
+                >
+                  {formatPct(p.unrealized_pct)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function MarketScanCard({ rows }: { rows: ScanRow[] }) {
+  if (!rows || rows.length === 0) {
+    return (
+      <Card
+        title={
+          <span className="flex items-center gap-2">
+            <LineChartIcon size={14} /> Market scan
+          </span>
+        }
+      >
+        <p className="text-sm text-[var(--muted)]">
+          Waiting for the first multi-pair scan…
+        </p>
+      </Card>
+    );
+  }
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          <LineChartIcon size={14} /> Market scan — {rows.length} pairs ranked by conviction
+        </span>
+      }
+      action={
+        <span className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
+          best signal first
+        </span>
+      }
+    >
+      <div className="overflow-x-auto -mx-2">
+        <table className="w-full text-xs">
+          <thead className="text-[var(--muted)]">
+            <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+              <th>Symbol</th>
+              <th className="text-right">Price</th>
+              <th className="text-right">Tech score</th>
+              <th className="text-right">AI</th>
+              <th className="text-right">Conf.</th>
+              <th className="text-right">Conviction</th>
+              <th>Final</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.symbol} className="border-t [&>td]:px-2 [&>td]:py-2">
+                <td className="font-medium">{r.symbol}</td>
+                <td className="numeric text-right">${formatUsd(r.price)}</td>
+                <td
+                  className={cn(
+                    "numeric text-right",
+                    r.score > 0 && "text-[var(--success)]",
+                    r.score < 0 && "text-[var(--danger)]",
+                  )}
+                >
+                  {r.score.toFixed(2)}
+                </td>
+                <td className="text-right uppercase text-[10px]">
+                  {r.ai_action}
+                </td>
+                <td className="numeric text-right">
+                  {(r.ai_confidence * 100).toFixed(0)}%
+                </td>
+                <td
+                  className={cn(
+                    "numeric text-right font-medium",
+                    r.conviction > 0 && "text-[var(--success)]",
+                    r.conviction < 0 && "text-[var(--danger)]",
+                  )}
+                >
+                  {r.conviction.toFixed(2)}
+                </td>
+                <td>
+                  <ActionBadge action={r.action} />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  );
+}
+
+function AutotraderCard({
+  status,
+  onUpdate,
+}: {
+  status: Status | null;
+  onUpdate: (patch: AutotraderConfigPatch) => Promise<void>;
+}) {
+  const auto = status?.autotrader;
+  const [entry, setEntry] = useState("");
+  const [tp, setTp] = useState("");
+  const [sl, setSl] = useState("");
+  const [minConf, setMinConf] = useState("");
+  const [maxPos, setMaxPos] = useState("");
+  const [symbolsCsv, setSymbolsCsv] = useState("");
+
+  useEffect(() => {
+    if (!auto) return;
+    queueMicrotask(() => {
+      setEntry(String(auto.entry_position_usdt));
+      setTp(String(auto.take_profit_pct));
+      setSl(String(auto.stop_loss_pct));
+      setMinConf(String(auto.min_ai_confidence));
+      setMaxPos(String(auto.max_concurrent_positions ?? 1));
+      setSymbolsCsv((auto.scan_symbols ?? []).join(","));
+    });
+  }, [auto]);
+
+  if (!auto) return null;
+  const enabled = auto.enabled;
+  const lastDecision = auto.recent_decisions[auto.recent_decisions.length - 1];
+
+  const toggle = () =>
+    onUpdate({ auto_trade_enabled: !enabled });
+
+  const save = () => {
+    const patch: AutotraderConfigPatch = {};
+    const e = Number(entry);
+    const t = Number(tp);
+    const s = Number(sl);
+    const m = Number(minConf);
+    const mp = Number(maxPos);
+    if (Number.isFinite(e) && e > 0) patch.entry_position_usdt = e;
+    if (Number.isFinite(t) && t > 0) patch.take_profit_pct = t;
+    if (Number.isFinite(s) && s > 0) patch.stop_loss_pct = s;
+    if (Number.isFinite(m) && m >= 0 && m <= 1) patch.min_ai_confidence = m;
+    if (Number.isFinite(mp) && mp >= 1) patch.max_concurrent_positions = Math.floor(mp);
+    const trimmed = symbolsCsv.trim();
+    if (trimmed && trimmed !== (auto.scan_symbols ?? []).join(",")) {
+      patch.scan_symbols = trimmed;
+    }
+    if (Object.keys(patch).length > 0) void onUpdate(patch);
+  };
+
+  return (
+    <Card
+      title={
+        <span className="flex items-center gap-2">
+          <Bot size={14} /> Auto-trader
+          <span
+            className={cn(
+              "ml-1 text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded",
+              enabled
+                ? "bg-[var(--success)]/15 text-[var(--success)]"
+                : "bg-[var(--muted)]/20 text-[var(--muted)]",
+            )}
+          >
+            {enabled ? "ON" : "OFF"}
+          </span>
+        </span>
+      }
+      action={
+        <button
+          onClick={toggle}
+          className={cn(
+            "text-xs border rounded-md px-2 py-1",
+            enabled
+              ? "border-[var(--danger)]/40 text-[var(--danger)] hover:bg-[var(--danger)]/10"
+              : "border-[var(--success)]/40 text-[var(--success)] hover:bg-[var(--success)]/10",
+          )}
+        >
+          {enabled ? "Disable" : "Enable"}
+        </button>
+      }
+    >
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+        <NumField label="Entry (USDT)" value={entry} onChange={setEntry} step="50" />
+        <NumField label="Take profit %" value={tp} onChange={setTp} step="0.1" />
+        <NumField label="Stop loss %" value={sl} onChange={setSl} step="0.1" />
+        <NumField label="Min AI conf." value={minConf} onChange={setMinConf} step="0.05" />
+        <NumField label="Max positions" value={maxPos} onChange={setMaxPos} step="1" />
+      </div>
+      <div className="mt-3">
+        <div className="text-[10px] uppercase tracking-wide text-[var(--muted)] mb-1">
+          Scan symbols (comma-separated, e.g. BTC/USDT,ETH/USDT,SOL/USDT)
+        </div>
+        <input
+          type="text"
+          value={symbolsCsv}
+          onChange={(e) => setSymbolsCsv(e.target.value)}
+          className="w-full rounded-md border bg-transparent px-2 py-1.5 text-sm numeric outline-none focus:ring-2 focus:ring-[var(--foreground)]/20"
+        />
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        <button
+          onClick={save}
+          className="text-xs rounded-md border px-3 py-1.5 bg-[var(--foreground)] text-[var(--background)] hover:opacity-90"
+        >
+          Save
+        </button>
+        <span className="text-[11px] text-[var(--muted)]">
+          cooldown {auto.cooldown_seconds}s
+          {auto.last_trade_at && ` · last trade ${timeAgo(auto.last_trade_at)}`}
+        </span>
+      </div>
+      {lastDecision && (
+        <div className="mt-3 pt-3 border-t text-[11px] text-[var(--muted)]">
+          <div className="uppercase tracking-wide mb-1">Recent auto decisions</div>
+          <ul className="space-y-0.5 max-h-28 overflow-auto">
+            {[...auto.recent_decisions].reverse().map((d, i) => (
+              <li key={i} className="numeric">{d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function NumField({
+  label,
+  value,
+  onChange,
+  step,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  step?: string;
+}) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wide text-[var(--muted)] mb-1">
+        {label}
+      </div>
+      <input
+        type="number"
+        step={step}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="numeric w-full rounded-md border bg-transparent px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-[var(--foreground)]/20"
+      />
+    </div>
+  );
+}
+
+function DailyPnlTable({ days }: { days: PnlDay[] }) {
+  const rows = [...days].reverse().filter((d) => d.trades > 0 || d.paper !== 0);
+  if (rows.length === 0)
+    return (
+      <p className="text-xs text-[var(--muted)]">
+        No realized PnL yet. Sells will populate this.
+      </p>
+    );
+  return (
+    <div className="overflow-x-auto -mx-2">
+      <table className="w-full text-xs">
+        <thead className="text-[var(--muted)]">
+          <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+            <th>Date</th>
+            <th className="text-right">Trades</th>
+            <th className="text-right">Paper PnL</th>
+            <th className="text-right">Live PnL</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((d) => (
+            <tr key={d.date} className="border-t [&>td]:px-2 [&>td]:py-2">
+              <td className="text-[var(--muted)] numeric whitespace-nowrap">
+                {d.date}
+              </td>
+              <td className="numeric text-right">{d.trades}</td>
+              <td
+                className={cn(
+                  "numeric text-right",
+                  d.paper > 0 && "text-[var(--success)]",
+                  d.paper < 0 && "text-[var(--danger)]",
+                )}
+              >
+                {d.paper ? `$${formatUsd(d.paper)}` : "—"}
+              </td>
+              <td
+                className={cn(
+                  "numeric text-right",
+                  d.live > 0 && "text-[var(--success)]",
+                  d.live < 0 && "text-[var(--danger)]",
+                )}
+              >
+                {d.live ? `$${formatUsd(d.live)}` : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

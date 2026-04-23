@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.db import Signal, get_session
-from app.signals import scan, signal_to_dict
+from app.signals import scan_all, signal_result_to_dict, signal_to_dict
 from app.state import runtime
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
@@ -15,37 +16,58 @@ router = APIRouter(prefix="/api/signals", tags=["signals"])
 
 @router.post("/scan")
 async def manual_scan(session: AsyncSession = Depends(get_session)) -> dict:
-    execute_paper = runtime.mode == "paper"
-    result = await scan(session, execute_paper=execute_paper)
-    runtime.mark_scan(result.snapshot.price, result.final_action)
-    return {
-        "action": result.final_action,
-        "explanation": result.explanation,
-        "snapshot": {
-            "price": result.snapshot.price,
-            "rsi": result.snapshot.rsi,
-            "macd": result.snapshot.macd,
-            "macd_signal": result.snapshot.macd_signal,
-            "ma_fast": result.snapshot.ma_fast,
-            "ma_slow": result.snapshot.ma_slow,
-            "bb_upper": result.snapshot.bb_upper,
-            "bb_mid": result.snapshot.bb_mid,
-            "bb_lower": result.snapshot.bb_lower,
-            "score": result.snapshot.score,
-            "technical_action": result.snapshot.action,
-        },
-        "ai": {
-            "action": result.verdict.action,
-            "confidence": result.verdict.confidence,
-            "rationale": result.verdict.rationale,
-        },
-    }
+    """Trigger a multi-pair scan and return ranked results."""
+    results = await scan_all(session, settings.scan_symbols)
+    if results:
+        runtime.last_prices = {r.symbol: r.snapshot.price for r in results}
+        primary = next(
+            (r for r in results if r.symbol == settings.symbol), results[0]
+        )
+        runtime.mark_scan(primary.snapshot.price, primary.final_action)
+    ranked = [signal_result_to_dict(r) for r in results]
+    primary_payload = None
+    if results:
+        p = next((r for r in results if r.symbol == settings.symbol), results[0])
+        primary_payload = {
+            "symbol": p.symbol,
+            "action": p.final_action,
+            "explanation": p.explanation,
+            "snapshot": {
+                "price": p.snapshot.price,
+                "rsi": p.snapshot.rsi,
+                "macd": p.snapshot.macd,
+                "macd_signal": p.snapshot.macd_signal,
+                "ma_fast": p.snapshot.ma_fast,
+                "ma_slow": p.snapshot.ma_slow,
+                "bb_upper": p.snapshot.bb_upper,
+                "bb_mid": p.snapshot.bb_mid,
+                "bb_lower": p.snapshot.bb_lower,
+                "score": p.snapshot.score,
+                "technical_action": p.snapshot.action,
+            },
+            "ai": {
+                "action": p.verdict.action,
+                "confidence": p.verdict.confidence,
+                "rationale": p.verdict.rationale,
+            },
+        }
+    return {"primary": primary_payload, "scan": ranked}
 
 
 @router.get("")
-async def list_signals(limit: int = 50, session: AsyncSession = Depends(get_session)) -> dict:
+async def list_signals(
+    limit: int = 50,
+    symbol: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
     limit = max(1, min(500, limit))
-    result = await session.execute(
-        select(Signal).order_by(Signal.ts.desc()).limit(limit)
-    )
+    stmt = select(Signal).order_by(Signal.ts.desc()).limit(limit)
+    if symbol:
+        stmt = (
+            select(Signal)
+            .where(Signal.symbol == symbol)
+            .order_by(Signal.ts.desc())
+            .limit(limit)
+        )
+    result = await session.execute(stmt)
     return {"signals": [signal_to_dict(s) for s in result.scalars().all()]}

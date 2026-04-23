@@ -19,6 +19,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export type Mode = "signals" | "paper" | "live";
 
+export type AutotraderStatus = {
+  enabled: boolean;
+  entry_position_usdt: number;
+  take_profit_pct: number;
+  stop_loss_pct: number;
+  min_ai_confidence: number;
+  cooldown_seconds: number;
+  max_concurrent_positions: number;
+  scan_symbols: string[];
+  last_trade_at: string | null;
+  recent_decisions: string[];
+};
+
 export type Status = {
   mode: Mode;
   symbol: string;
@@ -28,8 +41,59 @@ export type Status = {
   last_price: number;
   scan_interval_seconds: number;
   ai_enabled: boolean;
+  ai_provider?: string | null;
+  scan_symbols?: string[];
   binance: { has_credentials: boolean; testnet: boolean };
+  autotrader?: AutotraderStatus;
   errors: string[];
+};
+
+export type AutotraderConfigPatch = Partial<{
+  auto_trade_enabled: boolean;
+  entry_position_usdt: number;
+  take_profit_pct: number;
+  stop_loss_pct: number;
+  min_ai_confidence: number;
+  auto_trade_cooldown_seconds: number;
+  max_concurrent_positions: number;
+  scan_symbols: string;
+}>;
+
+export type ScanRow = {
+  symbol: string;
+  price: number;
+  action: "buy" | "sell" | "hold";
+  score: number;
+  conviction: number;
+  rsi: number;
+  macd: number;
+  macd_signal: number;
+  ma_fast: number;
+  ma_slow: number;
+  bb_upper: number;
+  bb_lower: number;
+  ai_action: string;
+  ai_confidence: number;
+  ai_rationale: string;
+  explanation: string;
+};
+
+export type PaperPosition = {
+  symbol: string;
+  amount: number;
+  avg_cost: number;
+  mark_price: number;
+  value_usdt: number;
+  unrealized_pnl: number;
+  unrealized_pct: number;
+};
+
+export type LiveBalance = {
+  symbol: string;
+  asset: string;
+  amount: number;
+  mark_price: number;
+  value_usdt: number;
 };
 
 export type Ticker = {
@@ -118,6 +182,7 @@ export type Portfolio = {
     equity: number;
     unrealized_pnl: number;
     starting_usdt: number;
+    positions: PaperPosition[];
   };
   live: null | {
     usdt?: number;
@@ -126,6 +191,7 @@ export type Portfolio = {
     equity?: number;
     testnet: boolean;
     error?: string;
+    balances?: LiveBalance[];
   };
 };
 
@@ -144,13 +210,21 @@ export const api = {
   indicators: () => request<Indicators>("/api/market/indicators"),
   scan: () =>
     request<{
-      action: "buy" | "sell" | "hold";
-      explanation: string;
-      snapshot: Record<string, number | string>;
-      ai: { action: string; confidence: number; rationale: string };
+      primary: null | {
+        symbol: string;
+        action: "buy" | "sell" | "hold";
+        explanation: string;
+        snapshot: Record<string, number | string>;
+        ai: { action: string; confidence: number; rationale: string };
+      };
+      scan: ScanRow[];
     }>("/api/signals/scan", { method: "POST" }),
-  signals: (limit = 50) =>
-    request<{ signals: SignalRow[] }>(`/api/signals?limit=${limit}`),
+  signals: (limit = 50, symbol?: string) =>
+    request<{ signals: SignalRow[] }>(
+      `/api/signals?limit=${limit}${symbol ? `&symbol=${encodeURIComponent(symbol)}` : ""}`,
+    ),
+  marketScan: () =>
+    request<{ scan: ScanRow[]; symbols: string[] }>("/api/market/scan"),
   trades: (limit = 100, mode?: string) =>
     request<{ trades: TradeRow[] }>(
       `/api/trades?limit=${limit}${mode ? `&mode=${mode}` : ""}`,
@@ -170,4 +244,9 @@ export const api = {
     }),
   resetPaper: () =>
     request<{ ok: boolean }>("/api/trades/paper/reset", { method: "POST" }),
+  updateAutotrader: (patch: AutotraderConfigPatch) =>
+    request<AutotraderStatus>("/api/control/autotrader", {
+      method: "POST",
+      body: JSON.stringify(patch),
+    }),
 };
