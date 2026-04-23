@@ -14,7 +14,6 @@ import {
   Target,
 } from "lucide-react";
 import { Card, Stat } from "@/components/card";
-import { PriceChart } from "@/components/price-chart";
 import { PnlChart } from "@/components/pnl-chart";
 import { ActionBadge } from "@/components/action-badge";
 import { ModeSwitcher } from "@/components/mode-switcher";
@@ -22,8 +21,7 @@ import { cn, formatBtc, formatPct, formatUsd, timeAgo } from "@/lib/utils";
 import {
   api,
   type AutotraderConfigPatch,
-  type Candle,
-  type Indicators,
+  type ClosedTrade,
   type Mode,
   type PaperPosition,
   type PnlDay,
@@ -32,16 +30,13 @@ import {
   type SignalRow,
   type Status,
   type Ticker,
-  type TradeRow,
 } from "@/lib/api";
 
 export default function Page() {
   const [status, setStatus] = useState<Status | null>(null);
   const [ticker, setTicker] = useState<Ticker | null>(null);
-  const [candles, setCandles] = useState<Candle[]>([]);
-  const [indicators, setIndicators] = useState<Indicators | null>(null);
   const [signals, setSignals] = useState<SignalRow[]>([]);
-  const [trades, setTrades] = useState<TradeRow[]>([]);
+  const [closedTrades, setClosedTrades] = useState<ClosedTrade[]>([]);
   const [portfolio, setPortfolio] = useState<Portfolio | null>(null);
   const [pnl, setPnl] = useState<PnlDay[]>([]);
   const [marketScan, setMarketScan] = useState<ScanRow[]>([]);
@@ -52,23 +47,19 @@ export default function Page() {
 
   const refreshAll = useCallback(async () => {
     try {
-      const [s, t, c, ind, sigs, tr, pf, p, ms] = await Promise.all([
+      const [s, t, sigs, ct, pf, p, ms] = await Promise.all([
         api.status(),
         api.ticker(),
-        api.candles(150),
-        api.indicators(),
         api.signals(30),
-        api.trades(40),
+        api.closedTrades(50),
         api.portfolio(),
         api.dailyPnl(14),
         api.marketScan().catch(() => ({ scan: [], symbols: [] })),
       ]);
       setStatus(s);
       setTicker(t);
-      setCandles(c.candles);
-      setIndicators(ind);
       setSignals(sigs.signals);
-      setTrades(tr.trades);
+      setClosedTrades(ct.closed);
       setPortfolio(pf);
       setPnl(p.days);
       setMarketScan(ms.scan);
@@ -206,29 +197,6 @@ export default function Page() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <Card
-          className="lg:col-span-2"
-          title={
-            <span className="flex items-center gap-2">
-              <LineChartIcon size={14} /> Price — {status?.symbol ?? "BTC/USDT"} ({status?.timeframe ?? "15m"})
-            </span>
-          }
-          action={
-            ticker?.source && (
-              <span className="text-[10px] uppercase tracking-wider text-[var(--muted)]">
-                source: {ticker.source}
-              </span>
-            )
-          }
-        >
-          <PriceChart candles={candles} />
-        </Card>
-        <Card title="Indicators">
-          {indicators ? <IndicatorsPanel indicators={indicators} /> : <Skeleton />}
-        </Card>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card
           title={
             <span className="flex items-center gap-2">
               <Brain size={14} /> Portfolio
@@ -295,8 +263,8 @@ export default function Page() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <Card className="lg:col-span-2" title="Trade history">
-          <TradeTable trades={trades} />
+        <Card className="lg:col-span-2" title="Completed trades">
+          <ClosedTradeTable rows={closedTrades} />
         </Card>
         <Card title="Daily PnL breakdown">
           <DailyPnlTable days={pnl} />
@@ -385,80 +353,6 @@ function Header({
           Scan now
         </button>
       </div>
-    </div>
-  );
-}
-
-function IndicatorsPanel({ indicators }: { indicators: Indicators }) {
-  const voteColor = (v: number) =>
-    v > 0
-      ? "text-[var(--success)]"
-      : v < 0
-        ? "text-[var(--danger)]"
-        : "text-[var(--muted)]";
-  return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <span className="text-xs text-[var(--muted)]">Aggregate</span>
-        <div className="flex items-center gap-2">
-          <span className="numeric text-sm">{indicators.score.toFixed(2)}</span>
-          <ActionBadge action={indicators.action} />
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 text-sm">
-        <Row
-          label="RSI(14)"
-          value={indicators.rsi.toFixed(1)}
-          extra={voteLabel(indicators.rsi_vote)}
-          extraCls={voteColor(indicators.rsi_vote)}
-        />
-        <Row
-          label="MACD"
-          value={indicators.macd.toFixed(1)}
-          extra={`sig ${indicators.macd_signal.toFixed(1)}`}
-          extraCls={voteColor(indicators.macd_vote)}
-        />
-        <Row
-          label="MA fast/slow"
-          value={`${indicators.ma_fast.toFixed(0)} / ${indicators.ma_slow.toFixed(0)}`}
-          extra={voteLabel(indicators.ma_vote)}
-          extraCls={voteColor(indicators.ma_vote)}
-        />
-        <Row
-          label="Bollinger"
-          value={`${indicators.bb_lower.toFixed(0)}–${indicators.bb_upper.toFixed(0)}`}
-          extra={voteLabel(indicators.bb_vote)}
-          extraCls={voteColor(indicators.bb_vote)}
-        />
-      </div>
-    </div>
-  );
-}
-
-function voteLabel(v: number) {
-  return v > 0 ? "bullish" : v < 0 ? "bearish" : "neutral";
-}
-
-function Row({
-  label,
-  value,
-  extra,
-  extraCls,
-}: {
-  label: string;
-  value: string;
-  extra?: string;
-  extraCls?: string;
-}) {
-  return (
-    <div>
-      <div className="text-[11px] uppercase tracking-wide text-[var(--muted)]">
-        {label}
-      </div>
-      <div className="numeric font-medium">{value}</div>
-      {extra && (
-        <div className={cn("text-[11px] mt-0.5", extraCls)}>{extra}</div>
-      )}
     </div>
   );
 }
@@ -650,46 +544,72 @@ function SignalTable({ signals }: { signals: SignalRow[] }) {
   );
 }
 
-function TradeTable({ trades }: { trades: TradeRow[] }) {
-  if (trades.length === 0)
-    return <p className="text-xs text-[var(--muted)]">No trades yet.</p>;
+function ClosedTradeTable({ rows }: { rows: ClosedTrade[] }) {
+  if (rows.length === 0)
+    return (
+      <p className="text-xs text-[var(--muted)]">
+        No completed trades yet. Trades appear here once the auto-trader exits
+        a position (take-profit, stop-loss, or SELL signal).
+      </p>
+    );
   return (
     <div className="overflow-x-auto -mx-2">
       <table className="w-full text-xs">
         <thead className="text-[var(--muted)]">
           <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
-            <th>Time</th>
+            <th>Closed</th>
+            <th>Pair</th>
             <th>Mode</th>
-            <th>Side</th>
-            <th>Price</th>
+            <th>Entry</th>
+            <th>Exit</th>
             <th>Amount</th>
-            <th>USDT</th>
+            <th>Invested</th>
+            <th>Duration</th>
             <th>PnL</th>
+            <th>PnL %</th>
+            <th>Exit reason</th>
           </tr>
         </thead>
         <tbody>
-          {trades.map((t) => (
-            <tr key={t.id} className="border-t [&>td]:px-2 [&>td]:py-2">
+          {rows.map((r) => (
+            <tr
+              key={`${r.symbol}-${r.entry_ts}-${r.exit_ts}`}
+              className="border-t [&>td]:px-2 [&>td]:py-2"
+            >
               <td className="text-[var(--muted)] whitespace-nowrap">
-                {timeAgo(t.ts)}
+                {timeAgo(r.exit_ts)}
               </td>
+              <td className="font-medium">{r.symbol}</td>
               <td className="uppercase text-[10px] tracking-wider">
-                {t.mode}
+                {r.mode}
               </td>
-              <td>
-                <ActionBadge action={t.side} />
+              <td className="numeric">${formatUsd(r.entry_price)}</td>
+              <td className="numeric">${formatUsd(r.exit_price)}</td>
+              <td className="numeric">{r.amount.toFixed(4)}</td>
+              <td className="numeric">${formatUsd(r.quote_invested)}</td>
+              <td className="numeric text-[var(--muted)]">
+                {formatDuration(r.duration_seconds)}
               </td>
-              <td className="numeric">${formatUsd(t.price)}</td>
-              <td className="numeric">{formatBtc(t.amount)}</td>
-              <td className="numeric">${formatUsd(t.quote_amount)}</td>
               <td
                 className={cn(
                   "numeric",
-                  t.pnl > 0 && "text-[var(--success)]",
-                  t.pnl < 0 && "text-[var(--danger)]",
+                  r.pnl > 0 && "text-[var(--success)]",
+                  r.pnl < 0 && "text-[var(--danger)]",
                 )}
               >
-                {t.pnl ? `$${formatUsd(t.pnl)}` : "—"}
+                ${formatUsd(r.pnl)}
+              </td>
+              <td
+                className={cn(
+                  "numeric",
+                  r.pnl_pct > 0 && "text-[var(--success)]",
+                  r.pnl_pct < 0 && "text-[var(--danger)]",
+                )}
+              >
+                {formatPct(r.pnl_pct)}
+              </td>
+              <td className="text-[var(--muted)] max-w-[180px] truncate">
+                {summarizeExit(r.exit_note)}
               </td>
             </tr>
           ))}
@@ -697,6 +617,25 @@ function TradeTable({ trades }: { trades: TradeRow[] }) {
       </table>
     </div>
   );
+}
+
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  const rem = m % 60;
+  return rem === 0 ? `${h}h` : `${h}h${rem}m`;
+}
+
+function summarizeExit(note: string): string {
+  const n = note.toLowerCase();
+  if (n.includes("tp") || n.includes("take profit") || n.includes("take_profit"))
+    return "Take profit";
+  if (n.includes("sl") || n.includes("stop loss") || n.includes("stop_loss"))
+    return "Stop loss";
+  if (n.includes("signal") || n.includes("sell")) return "SELL signal";
+  return note || "—";
 }
 
 function Skeleton() {

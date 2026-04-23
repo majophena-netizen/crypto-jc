@@ -42,6 +42,87 @@ async def list_trades(
     return {"trades": [trade_to_dict(t) for t in result.scalars().all()]}
 
 
+@router.get("/closed")
+async def list_closed_trades(
+    limit: int = 50,
+    mode: str | None = None,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Pair BUY + SELL trades per symbol (FIFO) and return completed round-trips.
+
+    Each returned row has the full lifecycle on a single line: entry time/price,
+    exit time/price, amount, duration, realized PnL in USDT + percent.
+    """
+    limit = max(1, min(500, limit))
+    stmt = select(Trade).order_by(Trade.ts.asc())
+    if mode:
+        stmt = select(Trade).where(Trade.mode == mode).order_by(Trade.ts.asc())
+    result = await session.execute(stmt)
+    all_trades = list(result.scalars().all())
+
+    # FIFO queue of open buy legs per (mode, symbol).
+    from collections import deque
+
+    open_legs: dict[tuple[str, str], deque[Trade]] = {}
+    closed: list[dict] = []
+    for t in all_trades:
+        key = (t.mode, t.symbol)
+        legs = open_legs.setdefault(key, deque())
+        if t.side == "buy":
+            legs.append(t)
+            continue
+        # side == "sell": pair with oldest buy legs until amount consumed.
+        remaining = float(t.amount)
+        sell_fee_left = float(t.fee or 0.0)
+        exit_price = float(t.price)
+        exit_ts = t.ts
+        while remaining > 1e-12 and legs:
+            buy = legs[0]
+            take = min(remaining, float(buy.amount))
+            buy_fee_share = (
+                float(buy.fee or 0.0) * (take / float(buy.amount))
+                if float(buy.amount) > 0 else 0.0
+            )
+            sell_fee_share = (
+                sell_fee_left * (take / float(t.amount))
+                if float(t.amount) > 0 else 0.0
+            )
+            entry_cost = take * float(buy.price)
+            exit_value = take * exit_price
+            pnl = exit_value - entry_cost - buy_fee_share - sell_fee_share
+            pct = (pnl / entry_cost * 100.0) if entry_cost > 0 else 0.0
+            duration_s = max(
+                0, int((exit_ts - buy.ts).total_seconds())
+            )
+            closed.append({
+                "mode": t.mode,
+                "symbol": t.symbol,
+                "amount": take,
+                "entry_ts": buy.ts.isoformat(),
+                "entry_price": float(buy.price),
+                "exit_ts": exit_ts.isoformat(),
+                "exit_price": exit_price,
+                "quote_invested": entry_cost,
+                "quote_returned": exit_value,
+                "fees": buy_fee_share + sell_fee_share,
+                "pnl": pnl,
+                "pnl_pct": pct,
+                "duration_seconds": duration_s,
+                "entry_note": buy.note or "",
+                "exit_note": t.note or "",
+            })
+            # Reduce or remove the buy leg.
+            buy.amount = float(buy.amount) - take
+            buy.fee = float(buy.fee or 0.0) - buy_fee_share
+            if buy.amount <= 1e-12:
+                legs.popleft()
+            remaining -= take
+        # Any leftover sell (no matching buy) is ignored.
+
+    closed.sort(key=lambda r: r["exit_ts"], reverse=True)
+    return {"closed": closed[:limit]}
+
+
 @router.post("/execute")
 async def execute(
     body: ManualTrade, session: AsyncSession = Depends(get_session)

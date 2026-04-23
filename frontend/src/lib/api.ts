@@ -197,6 +197,24 @@ export type Portfolio = {
 
 export type PnlDay = { date: string; paper: number; live: number; trades: number };
 
+export type ClosedTrade = {
+  mode: "paper" | "live";
+  symbol: string;
+  amount: number;
+  entry_ts: string;
+  entry_price: number;
+  exit_ts: string;
+  exit_price: number;
+  quote_invested: number;
+  quote_returned: number;
+  fees: number;
+  pnl: number;
+  pnl_pct: number;
+  duration_seconds: number;
+  entry_note: string;
+  exit_note: string;
+};
+
 export const api = {
   status: () => request<Status>("/api/control/status"),
   setMode: (mode: Mode) =>
@@ -228,6 +246,10 @@ export const api = {
   trades: (limit = 100, mode?: string) =>
     request<{ trades: TradeRow[] }>(
       `/api/trades?limit=${limit}${mode ? `&mode=${mode}` : ""}`,
+    ),
+  closedTrades: (limit = 50, mode?: string) =>
+    request<{ closed: ClosedTrade[] }>(
+      `/api/trades/closed?limit=${limit}${mode ? `&mode=${mode}` : ""}`,
     ),
   portfolio: () => request<Portfolio>("/api/trades/portfolio"),
   dailyPnl: (days = 14) =>
