@@ -212,6 +212,21 @@ async def tick_symbol(
                 reason=f"SELL signal ({pnl_pct:+.2f}%); {result.explanation}",
                 tag="exit_signal",
             )
+        # Record a throttled "holding" heartbeat so the dashboard shows that
+        # every position is being evaluated each tick against TP/SL/signal
+        # thresholds. Only record when PnL% crosses a 0.25% band to avoid spam.
+        tp_target = settings.take_profit_pct
+        sl_target = -settings.stop_loss_pct
+        bucket = round(pnl_pct * 4) / 4  # quarter-percent bucket
+        last_bucket_key = f"_last_bucket::{mode}::{symbol}"
+        last_bucket = getattr(state, last_bucket_key, None)
+        if last_bucket != bucket:
+            state.record(
+                symbol,
+                "holding",
+                f"PnL {pnl_pct:+.2f}% (TP {tp_target:+.2f}% / SL {sl_target:+.2f}%)",
+            )
+            setattr(state, last_bucket_key, bucket)
         return AutoTradeDecision(symbol, "hold", f"holding ({pnl_pct:+.2f}%)")
 
     # --- Entry ---

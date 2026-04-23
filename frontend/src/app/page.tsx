@@ -499,7 +499,7 @@ function SignalTable({ signals }: { signals: SignalRow[] }) {
     <div className="overflow-x-auto -mx-2">
       <table className="w-full text-xs">
         <thead className="text-[var(--muted)]">
-          <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+          <tr className="[&>th]:font-normal [&>th]:px-2 [&>th]:pb-2 [&>th]:text-left">
             <th>Time</th>
             <th>Action</th>
             <th>Price</th>
@@ -556,18 +556,18 @@ function ClosedTradeTable({ rows }: { rows: ClosedTrade[] }) {
     <div className="overflow-x-auto -mx-2">
       <table className="w-full text-xs">
         <thead className="text-[var(--muted)]">
-          <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
-            <th>Closed</th>
-            <th>Pair</th>
-            <th>Mode</th>
-            <th>Entry</th>
-            <th>Exit</th>
-            <th>Amount</th>
-            <th>Invested</th>
-            <th>Duration</th>
-            <th>PnL</th>
-            <th>PnL %</th>
-            <th>Exit reason</th>
+          <tr className="[&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+            <th className="text-left">Closed</th>
+            <th className="text-left">Pair</th>
+            <th className="text-left">Mode</th>
+            <th className="text-right">Entry</th>
+            <th className="text-right">Exit</th>
+            <th className="text-right">Amount</th>
+            <th className="text-right">Invested</th>
+            <th className="text-right">Duration</th>
+            <th className="text-right">PnL</th>
+            <th className="text-right">PnL %</th>
+            <th className="text-left">Exit reason</th>
           </tr>
         </thead>
         <tbody>
@@ -583,16 +583,16 @@ function ClosedTradeTable({ rows }: { rows: ClosedTrade[] }) {
               <td className="uppercase text-[10px] tracking-wider">
                 {r.mode}
               </td>
-              <td className="numeric">${formatUsd(r.entry_price)}</td>
-              <td className="numeric">${formatUsd(r.exit_price)}</td>
-              <td className="numeric">{r.amount.toFixed(4)}</td>
-              <td className="numeric">${formatUsd(r.quote_invested)}</td>
-              <td className="numeric text-[var(--muted)]">
+              <td className="numeric text-right">${formatUsd(r.entry_price)}</td>
+              <td className="numeric text-right">${formatUsd(r.exit_price)}</td>
+              <td className="numeric text-right">{r.amount.toFixed(4)}</td>
+              <td className="numeric text-right">${formatUsd(r.quote_invested)}</td>
+              <td className="numeric text-right text-[var(--muted)]">
                 {formatDuration(r.duration_seconds)}
               </td>
               <td
                 className={cn(
-                  "numeric",
+                  "numeric text-right",
                   r.pnl > 0 && "text-[var(--success)]",
                   r.pnl < 0 && "text-[var(--danger)]",
                 )}
@@ -601,7 +601,7 @@ function ClosedTradeTable({ rows }: { rows: ClosedTrade[] }) {
               </td>
               <td
                 className={cn(
-                  "numeric",
+                  "numeric text-right",
                   r.pnl_pct > 0 && "text-[var(--success)]",
                   r.pnl_pct < 0 && "text-[var(--danger)]",
                 )}
@@ -690,8 +690,8 @@ function PositionsCard({ portfolio }: { portfolio: Portfolio | null }) {
       <div className="overflow-x-auto -mx-2">
         <table className="w-full text-xs">
           <thead className="text-[var(--muted)]">
-            <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
-              <th>Symbol</th>
+            <tr className="[&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+              <th className="text-left">Symbol</th>
               <th className="text-right">Qty</th>
               <th className="text-right">Avg cost</th>
               <th className="text-right">Mark</th>
@@ -765,14 +765,14 @@ function MarketScanCard({ rows }: { rows: ScanRow[] }) {
       <div className="overflow-x-auto -mx-2">
         <table className="w-full text-xs">
           <thead className="text-[var(--muted)]">
-            <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
-              <th>Symbol</th>
+            <tr className="[&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+              <th className="text-left">Symbol</th>
               <th className="text-right">Price</th>
               <th className="text-right">Tech score</th>
               <th className="text-right">AI</th>
               <th className="text-right">Conf.</th>
               <th className="text-right">Conviction</th>
-              <th>Final</th>
+              <th className="text-left">Final</th>
             </tr>
           </thead>
           <tbody>
@@ -983,8 +983,8 @@ function DailyPnlTable({ days }: { days: PnlDay[] }) {
     <div className="overflow-x-auto -mx-2">
       <table className="w-full text-xs">
         <thead className="text-[var(--muted)]">
-          <tr className="[&>th]:text-left [&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
-            <th>Date</th>
+          <tr className="[&>th]:font-normal [&>th]:px-2 [&>th]:pb-2">
+            <th className="text-left">Date</th>
             <th className="text-right">Trades</th>
             <th className="text-right">Paper PnL</th>
             <th className="text-right">Live PnL</th>
