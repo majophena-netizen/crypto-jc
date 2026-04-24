@@ -21,6 +21,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import exchange
@@ -37,15 +38,24 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AutoTradeDecision:
     symbol: str
-    action: str  # "entry" | "exit_tp" | "exit_sl" | "exit_signal" | "hold" | "skip"
+    action: str  # "entry" | "exit_tp" | "exit_sl" | "exit_trail" | "exit_signal" | "exit_timeout" | "hold" | "skip"
     reason: str
     trade: Trade | None = None
+
+
+@dataclass
+class PositionMeta:
+    """Per-position bookkeeping for exit logic."""
+    entry_ts: datetime
+    peak_price: float
 
 
 @dataclass
 class AutoTraderState:
     last_trade_at: datetime | None = None
     last_decisions: list[str] = field(default_factory=list)
+    # (mode, symbol) -> meta. Populated on entry, cleared on exit.
+    position_meta: dict[tuple[str, str], PositionMeta] = field(default_factory=dict)
 
     def record(self, symbol: str, action: str, reason: str) -> None:
         ts = datetime.now(UTC).strftime("%H:%M:%S")
@@ -56,6 +66,37 @@ class AutoTraderState:
 
 
 state = AutoTraderState()
+
+
+async def _hydrate_position_meta(
+    session: AsyncSession, mode: str, symbol: str, current_price: float
+) -> PositionMeta:
+    """Return meta for an open position, recovering ``entry_ts`` from DB if
+    missing (e.g. after a backend restart). ``peak_price`` defaults to
+    ``current_price`` when unknown so the trailing stop is only armed from
+    now on, never retroactively.
+    """
+    key = (mode, symbol)
+    meta = state.position_meta.get(key)
+    if meta is not None:
+        return meta
+    # Find the most recent BUY trade for this (mode, symbol) that has no
+    # matching SELL since — use its timestamp as entry_ts.
+    stmt = (
+        select(Trade)
+        .where(Trade.mode == mode, Trade.symbol == symbol, Trade.side == "buy")
+        .order_by(Trade.ts.desc())
+        .limit(1)
+    )
+    result = await session.execute(stmt)
+    last_buy = result.scalar_one_or_none()
+    entry_ts = last_buy.ts if last_buy is not None else datetime.now(UTC)
+    # Ensure timezone-aware UTC.
+    if entry_ts.tzinfo is None:
+        entry_ts = entry_ts.replace(tzinfo=UTC)
+    meta = PositionMeta(entry_ts=entry_ts, peak_price=max(current_price, 0.0))
+    state.position_meta[key] = meta
+    return meta
 
 
 def _in_cooldown() -> bool:
@@ -141,6 +182,9 @@ async def _open(
 
     state.last_trade_at = datetime.now(UTC)
     state.record(symbol, "entry", reason)
+    state.position_meta[(mode, symbol)] = PositionMeta(
+        entry_ts=datetime.now(UTC), peak_price=float(trade.price),
+    )
     logger.info("AUTO ENTRY (%s %s): %.6f @ %.4f", mode, symbol, trade.amount, trade.price)
     return AutoTradeDecision(symbol, "entry", reason, trade)
 
@@ -173,6 +217,8 @@ async def _close(
 
     state.last_trade_at = datetime.now(UTC)
     state.record(symbol, tag, reason)
+    # Clear per-position bookkeeping so the next entry starts fresh.
+    state.position_meta.pop((mode, symbol), None)
     logger.info("AUTO %s (%s %s): %.6f @ %.4f", tag.upper(), mode, symbol, trade.amount, trade.price)
     return AutoTradeDecision(symbol, tag, reason, trade)
 
@@ -192,18 +238,43 @@ async def tick_symbol(
     # --- Exits first ---
     if has_position and avg_cost > 0:
         pnl_pct = _pnl_pct(avg_cost, price)
+        meta = await _hydrate_position_meta(session, mode, symbol, price)
+        # Update peak price (high-water mark since entry).
+        if price > meta.peak_price:
+            meta.peak_price = price
+        peak_pnl_pct = _pnl_pct(avg_cost, meta.peak_price)
+
+        # 1. Take-profit
         if pnl_pct >= settings.take_profit_pct:
             return await _close(
                 session, mode, symbol, qty, price,
                 reason=f"take-profit ({pnl_pct:+.2f}% >= {settings.take_profit_pct:.2f}%)",
                 tag="exit_tp",
             )
+        # 2. Stop-loss
         if pnl_pct <= -settings.stop_loss_pct:
             return await _close(
                 session, mode, symbol, qty, price,
                 reason=f"stop-loss ({pnl_pct:+.2f}% <= -{settings.stop_loss_pct:.2f}%)",
                 tag="exit_sl",
             )
+        # 3. Trailing stop — armed only once the position has been in profit
+        #    above ``trailing_arm_pct``. Exits when the retrace from peak
+        #    exceeds ``trailing_stop_pct``.
+        if peak_pnl_pct >= settings.trailing_arm_pct and meta.peak_price > 0:
+            drawdown_pct = (
+                (meta.peak_price - price) / meta.peak_price * 100.0
+            )
+            if drawdown_pct >= settings.trailing_stop_pct:
+                return await _close(
+                    session, mode, symbol, qty, price,
+                    reason=(
+                        f"trailing stop ({drawdown_pct:+.2f}% retrace from peak "
+                        f"+{peak_pnl_pct:.2f}%); now at {pnl_pct:+.2f}%"
+                    ),
+                    tag="exit_trail",
+                )
+        # 4. SELL signal
         if result.final_action == "sell":
             if _in_cooldown():
                 return AutoTradeDecision(symbol, "hold", "sell signal but in cooldown")
@@ -212,19 +283,44 @@ async def tick_symbol(
                 reason=f"SELL signal ({pnl_pct:+.2f}%); {result.explanation}",
                 tag="exit_signal",
             )
+        # 5. Timeout — force-close positions held longer than max_hold_hours.
+        now = datetime.now(UTC)
+        held_seconds = (now - meta.entry_ts).total_seconds()
+        max_seconds = settings.max_hold_hours * 3600.0
+        if held_seconds >= max_seconds > 0:
+            return await _close(
+                session, mode, symbol, qty, price,
+                reason=(
+                    f"timeout (held {held_seconds/3600:.1f}h >= "
+                    f"{settings.max_hold_hours:.1f}h); PnL {pnl_pct:+.2f}%"
+                ),
+                tag="exit_timeout",
+            )
+
         # Record a throttled "holding" heartbeat so the dashboard shows that
-        # every position is being evaluated each tick against TP/SL/signal
-        # thresholds. Only record when PnL% crosses a 0.25% band to avoid spam.
+        # every position is being evaluated each tick. Only record when PnL%
+        # crosses a 0.25% band to avoid spam.
         tp_target = settings.take_profit_pct
         sl_target = -settings.stop_loss_pct
-        bucket = round(pnl_pct * 4) / 4  # quarter-percent bucket
+        held_h = held_seconds / 3600.0
+        bucket = round(pnl_pct * 4) / 4
         last_bucket_key = f"_last_bucket::{mode}::{symbol}"
         last_bucket = getattr(state, last_bucket_key, None)
         if last_bucket != bucket:
+            trail_note = (
+                f"peak {peak_pnl_pct:+.2f}%"
+                if peak_pnl_pct >= settings.trailing_arm_pct
+                else "trail not armed"
+            )
             state.record(
                 symbol,
                 "holding",
-                f"PnL {pnl_pct:+.2f}% (TP {tp_target:+.2f}% / SL {sl_target:+.2f}%)",
+                (
+                    f"PnL {pnl_pct:+.2f}% | {trail_note} | held {held_h:.1f}h "
+                    f"(TP {tp_target:+.2f}% / SL {sl_target:+.2f}% / "
+                    f"trail -{settings.trailing_stop_pct:.2f}% / "
+                    f"timeout {settings.max_hold_hours:.0f}h)"
+                ),
             )
             setattr(state, last_bucket_key, bucket)
         return AutoTradeDecision(symbol, "hold", f"holding ({pnl_pct:+.2f}%)")

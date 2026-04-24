@@ -143,6 +143,16 @@ class Settings(BaseSettings):
     # Max simultaneous open positions across all scanned symbols.
     max_concurrent_positions: int = Field(default=3, alias="MAX_CONCURRENT_POSITIONS")
 
+    # --- Trailing stop + timeout exits ---
+    # Trailing stop: exit when price retraces `trailing_stop_pct` % from the
+    # highest price observed since entry, BUT only once the position has been
+    # in profit beyond `trailing_arm_pct` % (so we don't cut losers early).
+    trailing_stop_pct: float = Field(default=1.0, alias="TRAILING_STOP_PCT")
+    trailing_arm_pct: float = Field(default=0.5, alias="TRAILING_ARM_PCT")
+    # Force close a position after this many hours if no TP/SL/trailing hit.
+    # Frees the slot for better opportunities instead of sitting stale.
+    max_hold_hours: float = Field(default=12.0, alias="MAX_HOLD_HOURS")
+
     # --- Strategy knobs ---
     rsi_period: int = Field(default=14, alias="RSI_PERIOD")
     rsi_oversold: float = Field(default=30.0, alias="RSI_OVERSOLD")

@@ -829,6 +829,9 @@ function AutotraderCard({
   const [sl, setSl] = useState("");
   const [minConf, setMinConf] = useState("");
   const [maxPos, setMaxPos] = useState("");
+  const [trailPct, setTrailPct] = useState("");
+  const [trailArm, setTrailArm] = useState("");
+  const [maxHold, setMaxHold] = useState("");
   const [symbolsCsv, setSymbolsCsv] = useState("");
 
   useEffect(() => {
@@ -839,6 +842,9 @@ function AutotraderCard({
       setSl(String(auto.stop_loss_pct));
       setMinConf(String(auto.min_ai_confidence));
       setMaxPos(String(auto.max_concurrent_positions ?? 1));
+      setTrailPct(String(auto.trailing_stop_pct ?? ""));
+      setTrailArm(String(auto.trailing_arm_pct ?? ""));
+      setMaxHold(String(auto.max_hold_hours ?? ""));
       setSymbolsCsv((auto.scan_symbols ?? []).join(","));
     });
   }, [auto]);
@@ -862,6 +868,12 @@ function AutotraderCard({
     if (Number.isFinite(s) && s > 0) patch.stop_loss_pct = s;
     if (Number.isFinite(m) && m >= 0 && m <= 1) patch.min_ai_confidence = m;
     if (Number.isFinite(mp) && mp >= 1) patch.max_concurrent_positions = Math.floor(mp);
+    const tr = Number(trailPct);
+    const ta = Number(trailArm);
+    const mh = Number(maxHold);
+    if (Number.isFinite(tr) && tr >= 0) patch.trailing_stop_pct = tr;
+    if (Number.isFinite(ta) && ta >= 0) patch.trailing_arm_pct = ta;
+    if (Number.isFinite(mh) && mh >= 0) patch.max_hold_hours = mh;
     const trimmed = symbolsCsv.trim();
     if (trimmed && trimmed !== (auto.scan_symbols ?? []).join(",")) {
       patch.scan_symbols = trimmed;
@@ -900,12 +912,15 @@ function AutotraderCard({
         </button>
       }
     >
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <NumField label="Entry (USDT)" value={entry} onChange={setEntry} step="50" />
         <NumField label="Take profit %" value={tp} onChange={setTp} step="0.1" />
         <NumField label="Stop loss %" value={sl} onChange={setSl} step="0.1" />
         <NumField label="Min AI conf." value={minConf} onChange={setMinConf} step="0.05" />
         <NumField label="Max positions" value={maxPos} onChange={setMaxPos} step="1" />
+        <NumField label="Trailing stop %" value={trailPct} onChange={setTrailPct} step="0.1" />
+        <NumField label="Trailing arm %" value={trailArm} onChange={setTrailArm} step="0.1" />
+        <NumField label="Max hold (h)" value={maxHold} onChange={setMaxHold} step="1" />
       </div>
       <div className="mt-3">
         <div className="text-[10px] uppercase tracking-wide text-[var(--muted)] mb-1">

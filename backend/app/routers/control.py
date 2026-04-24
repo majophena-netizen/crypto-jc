@@ -25,6 +25,9 @@ class AutoConfig(BaseModel):
     auto_trade_cooldown_seconds: int | None = Field(default=None, ge=0)
     max_concurrent_positions: int | None = Field(default=None, ge=1, le=20)
     scan_symbols: str | None = None  # CSV list
+    trailing_stop_pct: float | None = Field(default=None, ge=0)
+    trailing_arm_pct: float | None = Field(default=None, ge=0)
+    max_hold_hours: float | None = Field(default=None, ge=0)
 
 
 @router.get("/status")
@@ -52,6 +55,9 @@ async def status() -> dict:
             "min_ai_confidence": settings.min_ai_confidence,
             "cooldown_seconds": settings.auto_trade_cooldown_seconds,
             "max_concurrent_positions": settings.max_concurrent_positions,
+            "trailing_stop_pct": settings.trailing_stop_pct,
+            "trailing_arm_pct": settings.trailing_arm_pct,
+            "max_hold_hours": settings.max_hold_hours,
             "scan_symbols": settings.scan_symbols,
             "last_trade_at": (
                 autotrader.state.last_trade_at.isoformat()
@@ -82,6 +88,12 @@ async def update_autotrader(body: AutoConfig) -> dict:
         settings.max_concurrent_positions = body.max_concurrent_positions
     if body.scan_symbols is not None:
         settings.scan_symbols_csv = body.scan_symbols
+    if body.trailing_stop_pct is not None:
+        settings.trailing_stop_pct = body.trailing_stop_pct
+    if body.trailing_arm_pct is not None:
+        settings.trailing_arm_pct = body.trailing_arm_pct
+    if body.max_hold_hours is not None:
+        settings.max_hold_hours = body.max_hold_hours
     return {
         "enabled": settings.auto_trade_enabled,
         "entry_position_usdt": settings.entry_position_usdt,
@@ -90,6 +102,9 @@ async def update_autotrader(body: AutoConfig) -> dict:
         "min_ai_confidence": settings.min_ai_confidence,
         "cooldown_seconds": settings.auto_trade_cooldown_seconds,
         "max_concurrent_positions": settings.max_concurrent_positions,
+        "trailing_stop_pct": settings.trailing_stop_pct,
+        "trailing_arm_pct": settings.trailing_arm_pct,
+        "max_hold_hours": settings.max_hold_hours,
         "scan_symbols": settings.scan_symbols,
     }
 

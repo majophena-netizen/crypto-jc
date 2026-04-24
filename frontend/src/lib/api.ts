@@ -27,6 +27,9 @@ export type AutotraderStatus = {
   min_ai_confidence: number;
   cooldown_seconds: number;
   max_concurrent_positions: number;
+  trailing_stop_pct?: number;
+  trailing_arm_pct?: number;
+  max_hold_hours?: number;
   scan_symbols: string[];
   last_trade_at: string | null;
   recent_decisions: string[];
@@ -56,6 +59,9 @@ export type AutotraderConfigPatch = Partial<{
   min_ai_confidence: number;
   auto_trade_cooldown_seconds: number;
   max_concurrent_positions: number;
+  trailing_stop_pct: number;
+  trailing_arm_pct: number;
+  max_hold_hours: number;
   scan_symbols: string;
 }>;
 
